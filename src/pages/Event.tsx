@@ -159,11 +159,90 @@ export default function Event() {
     try {
       await updateDoc(doc(db, 'events', eventId), {
         status: 'started',
+        round: 1,
+        pastRounds: '[]',
         pods: JSON.stringify(pods)
       });
     } catch (error) {
       console.error("Error starting event:", error);
     }
+  };
+
+  const handleNextRound = async () => {
+    if (!eventId || !isOrganizer || !event.pods) return;
+    
+    try {
+      const currentPods = JSON.parse(event.pods);
+      const pastRounds = event.pastRounds ? JSON.parse(event.pastRounds) : [];
+      const newPastRounds = [...pastRounds, currentPods];
+      
+      const currentRound = event.round || 1;
+      
+      // Calculate standings to pair next round
+      const points: Record<string, number> = {};
+      players.forEach(p => points[p.id] = 0);
+      
+      newPastRounds.forEach(round => {
+        round.forEach((pod: any) => {
+          if (pod.winnerIds) {
+            pod.winnerIds.forEach((wId: string) => {
+              if (points[wId] !== undefined) points[wId] += 3;
+            });
+          }
+        });
+      });
+      
+      const standings = [...players].sort((a, b) => points[b.id] - points[a.id]);
+      
+      // Generate new pods
+      const chunkSize = event.format === 'Commander' ? 4 : 2;
+      let toPair = [...standings];
+      let newPods = [];
+      let podCount = 1;
+      
+      while (toPair.length > 0) {
+        newPods.push({
+          podNumber: podCount++,
+          playerIds: toPair.splice(0, chunkSize).map(p => p.id),
+          winnerIds: []
+        });
+      }
+      
+      await updateDoc(doc(db, 'events', eventId), {
+        round: currentRound + 1,
+        pods: JSON.stringify(newPods),
+        pastRounds: JSON.stringify(newPastRounds)
+      });
+      
+    } catch (error) {
+      console.error("Error generating next round:", error);
+    }
+  };
+
+  const calculateStandings = () => {
+    if (!event) return [];
+    const points: Record<string, number> = {};
+    players.forEach(p => points[p.id] = 0);
+    
+    const pastRounds = event.pastRounds ? JSON.parse(event.pastRounds) : [];
+    const currentPods = event.pods ? JSON.parse(event.pods) : [];
+    
+    const allRounds = [...pastRounds, currentPods];
+    
+    allRounds.forEach(round => {
+      round.forEach((pod: any) => {
+        if (pod.winnerIds) {
+          pod.winnerIds.forEach((wId: string) => {
+            if (points[wId] !== undefined) points[wId] += 3;
+          });
+        }
+      });
+    });
+    
+    return players.map(p => ({
+      ...p,
+      points: points[p.id] || 0
+    })).sort((a, b) => b.points - a.points);
   };
 
   const handleToggleWinner = async (podNumber: number, playerId: string) => {
@@ -198,7 +277,9 @@ export default function Event() {
     try {
       await updateDoc(doc(db, 'events', eventId), {
         status: 'lobby',
-        pods: deleteField()
+        pods: deleteField(),
+        round: deleteField(),
+        pastRounds: deleteField()
       });
     } catch (error) {
       console.error("Error resetting event:", error);
@@ -329,7 +410,7 @@ export default function Event() {
     );
   }
 
-  const joinUrl = `${window.location.origin}/event/${eventId}`;
+  const joinUrl = window.location.origin;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50 p-4 md:p-8">
@@ -490,54 +571,87 @@ export default function Event() {
             initial={{ opacity: 0, scale: 0.95 }} 
             animate={{ opacity: 1, scale: 1 }} 
             transition={{ duration: 0.5, type: 'spring' }}
-            className="space-y-6"
+            className="grid grid-cols-1 lg:grid-cols-3 gap-8"
           >
-            <h2 className="text-2xl font-bold flex items-center gap-2">
-              <Users className="w-6 h-6" /> Pairings
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {event.pods && JSON.parse(event.pods).map((pod: any, index: number) => (
-                <motion.div 
-                  key={pod.podNumber}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 + 0.2 }}
-                >
-                  <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden h-full flex flex-col">
-                    <div className="bg-zinc-950 px-6 py-4 border-b border-zinc-800 flex justify-between items-center">
-                      <h3 className="font-bold text-lg flex items-center gap-2">
-                        Table {pod.podNumber}
-                      </h3>
-                      <Badge variant="outline" className="text-zinc-400 border-zinc-700 bg-zinc-900">{pod.playerIds.length} Players</Badge>
-                    </div>
-                    <CardContent className="p-0 flex-1">
-                      <ul className="divide-y divide-zinc-800/50">
-                        {pod.playerIds.map((playerId: string) => {
-                          const player = players.find(p => p.id === playerId);
-                          const isWinner = pod.winnerIds?.includes(playerId);
-                          return (
-                            <li 
-                              key={playerId} 
-                              onClick={() => isOrganizer && handleToggleWinner(pod.podNumber, playerId)}
-                              className={`px-6 py-4 flex items-center justify-between transition-colors ${isOrganizer ? 'cursor-pointer hover:bg-zinc-800/50' : ''} ${isWinner ? 'bg-[#ffc72c]/10' : ''}`}
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isWinner ? 'bg-[#ffc72c] text-zinc-950' : 'bg-zinc-800 text-zinc-400'}`}>
-                                  {player?.displayName?.charAt(0).toUpperCase() || '?'}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="flex justify-between items-center">
+                <h2 className="text-2xl font-bold flex items-center gap-2">
+                  <Users className="w-6 h-6" /> Round {event.round || 1} Pairings
+                </h2>
+                {isOrganizer && (
+                  <Button 
+                    onClick={handleNextRound}
+                    className="h-10 px-4 border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-zinc-950 font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
+                  >
+                    Next Round <ChevronRight className="w-4 h-4 ml-1" />
+                  </Button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {event.pods && JSON.parse(event.pods).map((pod: any, index: number) => (
+                  <motion.div 
+                    key={pod.podNumber}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 + 0.2 }}
+                  >
+                    <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden h-full flex flex-col">
+                      <div className="bg-zinc-950 px-6 py-4 border-b border-zinc-800 flex justify-between items-center">
+                        <h3 className="font-bold text-lg flex items-center gap-2">
+                          Table {pod.podNumber}
+                        </h3>
+                        <Badge variant="outline" className="text-zinc-400 border-zinc-700 bg-zinc-900">{pod.playerIds.length} Players</Badge>
+                      </div>
+                      <CardContent className="p-0 flex-1">
+                        <ul className="divide-y divide-zinc-800/50">
+                          {pod.playerIds.map((playerId: string) => {
+                            const player = players.find(p => p.id === playerId);
+                            const isWinner = pod.winnerIds?.includes(playerId);
+                            return (
+                              <li 
+                                key={playerId} 
+                                onClick={() => isOrganizer && handleToggleWinner(pod.podNumber, playerId)}
+                                className={`px-6 py-4 flex items-center justify-between transition-colors ${isOrganizer ? 'cursor-pointer hover:bg-zinc-800/50' : ''} ${isWinner ? 'bg-[#ffc72c]/10' : ''}`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isWinner ? 'bg-[#ffc72c] text-zinc-950' : 'bg-zinc-800 text-zinc-400'}`}>
+                                    {player?.displayName?.charAt(0).toUpperCase() || '?'}
+                                  </div>
+                                  <span className={`font-medium ${isWinner ? 'text-[#ffc72c]' : 'text-zinc-200'}`}>
+                                    {player?.displayName || 'Unknown Player'}
+                                  </span>
                                 </div>
-                                <span className={`font-medium ${isWinner ? 'text-[#ffc72c]' : 'text-zinc-200'}`}>
-                                  {player?.displayName || 'Unknown Player'}
-                                </span>
-                              </div>
-                              {isWinner && <Trophy className="w-5 h-5 text-[#ffc72c]" />}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))}
+                                {isWinner && <Trophy className="w-5 h-5 text-[#ffc72c]" />}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+            
+            <div className="lg:col-span-1 space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <Trophy className="w-6 h-6" /> Standings
+              </h2>
+              <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden">
+                <CardContent className="p-0">
+                  <ul className="divide-y divide-zinc-800/50">
+                    {calculateStandings().map((player, index) => (
+                      <li key={player.id} className="px-6 py-4 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="text-zinc-500 font-mono w-4">{index + 1}.</span>
+                          <span className="font-medium text-zinc-200">{player.displayName}</span>
+                        </div>
+                        <span className="font-bold text-[#ffc72c]">{player.points} pts</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
             </div>
           </motion.div>
         )}
