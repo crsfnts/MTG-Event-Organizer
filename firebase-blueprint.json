@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "Event": {
+      "title": "Event",
+      "description": "A tabletop tournament event.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique event ID/code" },
+        "name": { "type": "string", "description": "Name of the event" },
+        "format": { "type": "string", "description": "Format of the event (e.g., Commander, Draft)" },
+        "maxPlayers": { "type": "number", "description": "Maximum number of players" },
+        "status": { "type": "string", "enum": ["lobby", "started", "finished"], "description": "Current status of the event" },
+        "createdAt": { "type": "timestamp", "description": "When the event was created" },
+        "organizerId": { "type": "string", "description": "User ID of the organizer" },
+        "pods": { 
+          "type": "string", 
+          "description": "JSON stringified array of pods, each containing a pod number and array of player IDs" 
+        }
+      },
+      "required": ["id", "name", "format", "status", "createdAt", "organizerId"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A player in an event.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique player ID" },
+        "eventId": { "type": "string", "description": "ID of the event they joined" },
+        "displayName": { "type": "string", "description": "Display name of the player" },
+        "joinedAt": { "type": "timestamp", "description": "When the player joined" },
+        "isOrganizer": { "type": "boolean", "description": "Whether this player is the organizer" }
+      },
+      "required": ["id", "eventId", "displayName", "joinedAt", "isOrganizer"]
+    }
+  },
+  "firestore": {
+    "/events/{eventId}": {
+      "schema": { "$ref": "#/entities/Event" },
+      "description": "Stores all events."
+    },
+    "/events/{eventId}/players/{playerId}": {
+      "schema": { "$ref": "#/entities/Player" },
+      "description": "Stores players for a specific event."
+    }
+  }
+}

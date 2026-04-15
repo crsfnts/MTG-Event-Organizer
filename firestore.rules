@@ -1,0 +1,135 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: events
+// Document ID: {eventId}
+// Fields:
+//   - id: string (required) - Unique event ID/code
+//   - name: string (required) - Name of the event
+//   - format: string (required) - Format of the event
+//   - maxPlayers: number (optional) - Maximum number of players
+//   - status: string (required) - Current status ('lobby', 'started', 'finished')
+//   - createdAt: timestamp (required) - When the event was created
+//   - organizerId: string (required) - User ID of the organizer
+//   - pods: string (optional) - JSON stringified array of pods
+//
+// Collection: events/{eventId}/players
+// Document ID: {playerId}
+// Fields:
+//   - id: string (required) - Unique player ID
+//   - eventId: string (required) - ID of the event
+//   - displayName: string (required) - Display name of the player
+//   - joinedAt: timestamp (required) - When the player joined
+//   - isOrganizer: boolean (required) - Whether this player is the organizer
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+    
+    function isValidEvent(data) {
+      let allowedFields = ['id', 'name', 'format', 'maxPlayers', 'status', 'createdAt', 'organizerId', 'pods'];
+      return hasRequiredFields(['id', 'name', 'format', 'status', 'createdAt', 'organizerId']) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 20 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.format is string && data.format.size() > 0 && data.format.size() < 50 &&
+             (!('maxPlayers' in data) || (data.maxPlayers is number && data.maxPlayers > 0 && data.maxPlayers <= 1000)) &&
+             data.status in ['lobby', 'started', 'finished'] &&
+             data.createdAt is timestamp &&
+             data.organizerId is string && data.organizerId.size() > 0 && data.organizerId.size() < 50 &&
+             (!('pods' in data) || (data.pods is string && data.pods.size() < 100000));
+    }
+    
+    function isValidPlayer(data) {
+      let allowedFields = ['id', 'eventId', 'displayName', 'joinedAt', 'isOrganizer'];
+      return hasRequiredFields(['id', 'eventId', 'displayName', 'joinedAt', 'isOrganizer']) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 50 &&
+             data.eventId is string && data.eventId.size() > 0 && data.eventId.size() < 20 &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 50 &&
+             data.joinedAt is timestamp &&
+             data.isOrganizer is bool;
+    }
+    
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /events/{eventId} {
+      // Anyone can read an event if they have the ID
+      allow read: if isAuthenticated();
+      
+      // Any authenticated user can create an event
+      allow create: if isAuthenticated() && 
+                    isValidEvent(request.resource.data) &&
+                    request.resource.data.organizerId == request.auth.uid &&
+                    request.resource.data.id == eventId;
+                    
+      // Only the organizer can update the event
+      allow update: if isAuthenticated() && 
+                    isValidEvent(request.resource.data) &&
+                    resource.data.organizerId == request.auth.uid &&
+                    request.resource.data.organizerId == resource.data.organizerId &&
+                    request.resource.data.id == resource.data.id &&
+                    request.resource.data.createdAt == resource.data.createdAt;
+                    
+      // Only the organizer can delete the event
+      allow delete: if isAuthenticated() && resource.data.organizerId == request.auth.uid;
+      
+      match /players/{playerId} {
+        // Anyone in the event can read the players
+        allow read: if isAuthenticated();
+        
+        // A user can join an event (create a player doc), or the organizer can add a manual player
+        allow create: if isAuthenticated() &&
+                      isValidPlayer(request.resource.data) &&
+                      request.resource.data.id == playerId &&
+                      request.resource.data.eventId == eventId &&
+                      // Either the user is creating their own player doc, OR the user is the organizer creating a manual player doc
+                      (
+                        request.resource.data.id == request.auth.uid || 
+                        get(/databases/$(database)/documents/events/$(eventId)).data.organizerId == request.auth.uid
+                      ) &&
+                      // If they claim to be organizer, verify they actually are the event organizer
+                      (request.resource.data.isOrganizer == false || 
+                       (request.resource.data.isOrganizer == true && get(/databases/$(database)/documents/events/$(eventId)).data.organizerId == request.auth.uid));
+                       
+        // A user can update their own player doc, or the organizer can update any player doc
+        allow update: if isAuthenticated() &&
+                      isValidPlayer(request.resource.data) &&
+                      request.resource.data.id == resource.data.id &&
+                      request.resource.data.eventId == resource.data.eventId &&
+                      request.resource.data.joinedAt == resource.data.joinedAt &&
+                      request.resource.data.isOrganizer == resource.data.isOrganizer &&
+                      (request.auth.uid == resource.data.id || get(/databases/$(database)/documents/events/$(eventId)).data.organizerId == request.auth.uid);
+                      
+        // A user can leave (delete their doc), or the organizer can kick them
+        allow delete: if isAuthenticated() &&
+                      (request.auth.uid == resource.data.id || get(/databases/$(database)/documents/events/$(eventId)).data.organizerId == request.auth.uid);
+      }
+    }
+  }
+}
