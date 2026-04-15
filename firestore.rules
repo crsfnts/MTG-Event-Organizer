@@ -9,10 +9,11 @@
 //   - name: string (required) - Name of the event
 //   - format: string (required) - Format of the event
 //   - maxPlayers: number (optional) - Maximum number of players
-//   - status: string (required) - Current status ('lobby', 'started', 'finished')
+//   - status: string (required) - Current status ('lobby', 'drafting', 'started', 'finished')
 //   - createdAt: timestamp (required) - When the event was created
 //   - organizerId: string (required) - User ID of the organizer
 //   - pods: string (optional) - JSON stringified array of pods
+//   - draftEndTime: number (optional) - Epoch timestamp for draft end
 //
 // Collection: events/{eventId}/players
 // Document ID: {playerId}
@@ -50,16 +51,17 @@ service cloud.firestore {
     }
     
     function isValidEvent(data) {
-      let allowedFields = ['id', 'name', 'format', 'maxPlayers', 'status', 'createdAt', 'organizerId', 'pods'];
+      let allowedFields = ['id', 'name', 'format', 'maxPlayers', 'status', 'createdAt', 'organizerId', 'pods', 'draftEndTime'];
       return hasRequiredFields(['id', 'name', 'format', 'status', 'createdAt', 'organizerId']) &&
              hasOnlyAllowedFields(allowedFields) &&
              data.id is string && data.id.size() > 0 && data.id.size() < 20 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.format is string && data.format.size() > 0 && data.format.size() < 50 &&
              (!('maxPlayers' in data) || (data.maxPlayers is number && data.maxPlayers > 0 && data.maxPlayers <= 1000)) &&
-             data.status in ['lobby', 'started', 'finished'] &&
+             data.status in ['lobby', 'drafting', 'started', 'finished'] &&
              data.createdAt is timestamp &&
              data.organizerId is string && data.organizerId.size() > 0 && data.organizerId.size() < 50 &&
+             (!('draftEndTime' in data) || data.draftEndTime is number) &&
              (!('pods' in data) || (data.pods is string && data.pods.size() < 100000));
     }
     

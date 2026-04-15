@@ -3,11 +3,11 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { doc, onSnapshot, collection, setDoc, updateDoc, deleteDoc, serverTimestamp, getDoc, deleteField } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { QRCodeSVG } from 'qrcode.react';
-import { Users, Copy, Check, Play, RefreshCw, Trash2, Edit2, UserPlus } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Users, Copy, Check, Play, RefreshCw, Trash2, Edit2, UserPlus, Trophy, Clock, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { motion } from 'motion/react';
@@ -26,6 +26,10 @@ export default function Event() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
+  const [directJoinName, setDirectJoinName] = useState('');
+  const [isJoining, setIsJoining] = useState(false);
+  const [playerToDelete, setPlayerToDelete] = useState<string | null>(null);
+  const [timeLeft, setTimeLeft] = useState<string>('');
 
   useEffect(() => {
     if (!eventId || !auth.currentUser) return;
@@ -65,6 +69,25 @@ export default function Event() {
       unsubscribePlayers();
     };
   }, [eventId, navigate]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (event?.status === 'drafting' && event?.draftEndTime) {
+      interval = setInterval(() => {
+        const now = Date.now();
+        const distance = event.draftEndTime - now;
+        if (distance <= 0) {
+          setTimeLeft('00:00');
+          clearInterval(interval);
+        } else {
+          const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+          const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+          setTimeLeft(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+        }
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [event?.status, event?.draftEndTime]);
 
   useEffect(() => {
     const joinEvent = async () => {
@@ -107,35 +130,30 @@ export default function Event() {
   const handleStartEvent = async () => {
     if (!eventId || !isOrganizer) return;
     
+    if (event.status === 'lobby' && event.format === 'Draft') {
+      try {
+        await updateDoc(doc(db, 'events', eventId), {
+          status: 'drafting',
+          draftEndTime: Date.now() + 45 * 60 * 1000 // 45 minutes
+        });
+      } catch (error) {
+        console.error("Error starting draft:", error);
+      }
+      return;
+    }
+
     // Generate pods
-    // Simple logic: group by 4, if remainder is 1, 2, or 3, distribute or make smaller pods
-    // For simplicity, let's just group into 4s, and the last pod might have 3, 4, or 5 if we merge
-    
+    const chunkSize = event.format === 'Commander' ? 4 : 2;
     let shuffledPlayers = [...players].sort(() => 0.5 - Math.random());
     let pods = [];
     let podCount = 1;
     
     while (shuffledPlayers.length > 0) {
-      if (shuffledPlayers.length === 5) {
-        // Make one pod of 5
-        pods.push({
-          podNumber: podCount++,
-          playerIds: shuffledPlayers.map(p => p.id)
-        });
-        shuffledPlayers = [];
-      } else if (shuffledPlayers.length >= 4) {
-        pods.push({
-          podNumber: podCount++,
-          playerIds: shuffledPlayers.splice(0, 4).map(p => p.id)
-        });
-      } else {
-        // Remaining 1, 2, or 3 players
-        pods.push({
-          podNumber: podCount++,
-          playerIds: shuffledPlayers.map(p => p.id)
-        });
-        shuffledPlayers = [];
-      }
+      pods.push({
+        podNumber: podCount++,
+        playerIds: shuffledPlayers.splice(0, chunkSize).map(p => p.id),
+        winnerIds: []
+      });
     }
 
     try {
@@ -145,6 +163,33 @@ export default function Event() {
       });
     } catch (error) {
       console.error("Error starting event:", error);
+    }
+  };
+
+  const handleToggleWinner = async (podNumber: number, playerId: string) => {
+    if (!eventId || !isOrganizer || !event.pods) return;
+    
+    try {
+      const currentPods = JSON.parse(event.pods);
+      const updatedPods = currentPods.map((pod: any) => {
+        if (pod.podNumber === podNumber) {
+          const isWinner = pod.winnerIds?.includes(playerId);
+          let newWinners = pod.winnerIds || [];
+          if (isWinner) {
+            newWinners = newWinners.filter((id: string) => id !== playerId);
+          } else {
+            newWinners = [...newWinners, playerId];
+          }
+          return { ...pod, winnerIds: newWinners };
+        }
+        return pod;
+      });
+
+      await updateDoc(doc(db, 'events', eventId), {
+        pods: JSON.stringify(updatedPods)
+      });
+    } catch (error) {
+      console.error("Error toggling winner:", error);
     }
   };
 
@@ -160,14 +205,13 @@ export default function Event() {
     }
   };
 
-  const handleRemovePlayer = async (playerId: string) => {
-    if (!eventId || !isOrganizer) return;
-    if (confirm('Are you sure you want to remove this player?')) {
-      try {
-        await deleteDoc(doc(db, 'events', eventId, 'players', playerId));
-      } catch (error) {
-        console.error("Error removing player:", error);
-      }
+  const handleRemovePlayer = async () => {
+    if (!eventId || !isOrganizer || !playerToDelete) return;
+    try {
+      await deleteDoc(doc(db, 'events', eventId, 'players', playerToDelete));
+      setPlayerToDelete(null);
+    } catch (error) {
+      console.error("Error removing player:", error);
     }
   };
 
@@ -205,6 +249,25 @@ export default function Event() {
     }
   };
 
+  const handleDirectJoin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!eventId || !auth.currentUser || !directJoinName) return;
+    setIsJoining(true);
+    try {
+      await setDoc(doc(db, 'events', eventId, 'players', auth.currentUser.uid), {
+        id: auth.currentUser.uid,
+        eventId: eventId,
+        displayName: directJoinName,
+        joinedAt: serverTimestamp(),
+        isOrganizer: false,
+      });
+    } catch (error) {
+      console.error("Error joining:", error);
+    } finally {
+      setIsJoining(false);
+    }
+  };
+
   const openEditModal = (player: any) => {
     setEditPlayerId(player.id);
     setEditPlayerName(player.displayName);
@@ -219,12 +282,70 @@ export default function Event() {
     return <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">Event not found.</div>;
   }
 
+  const isPlayer = players.some(p => p.id === auth.currentUser?.uid);
+  
+  if (!isOrganizer && !isPlayer) {
+    if (event.status !== 'lobby') {
+      return (
+        <div className="min-h-screen bg-zinc-950 text-zinc-50 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md bg-zinc-900 border-zinc-800 text-center p-8">
+            <h2 className="text-2xl font-bold mb-2">Event Started</h2>
+            <p className="text-zinc-400">This event has already started and is no longer accepting new players.</p>
+            <Button onClick={() => navigate('/')} className="mt-6 bg-zinc-800 hover:bg-zinc-700 text-white">Return Home</Button>
+          </Card>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-50 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md bg-zinc-900 border-zinc-800 text-zinc-50">
+          <CardHeader>
+            <CardTitle>Join {event.name}</CardTitle>
+            <CardDescription className="text-zinc-400">Enter your name to join this event.</CardDescription>
+          </CardHeader>
+          <form onSubmit={handleDirectJoin}>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="directJoinName">Your Name</Label>
+                <Input 
+                  id="directJoinName" 
+                  placeholder="Display Name" 
+                  value={directJoinName} 
+                  onChange={(e) => setDirectJoinName(e.target.value)}
+                  className="bg-zinc-950 border-zinc-800"
+                  required
+                />
+              </div>
+            </CardContent>
+            <CardFooter>
+              <Button type="submit" disabled={isJoining} className="w-full h-12 text-base border-none bg-[#0693e3] hover:bg-[#003388] text-white font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5">
+                {isJoining ? 'Joining...' : 'Join Event'}
+              </Button>
+            </CardFooter>
+          </form>
+        </Card>
+      </div>
+    );
+  }
+
   const joinUrl = `${window.location.origin}/event/${eventId}`;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50 p-4 md:p-8">
       <div className="max-w-4xl mx-auto space-y-6">
         
+        {/* Navigation */}
+        <div>
+          <Button 
+            variant="ghost" 
+            onClick={() => navigate('/')} 
+            className="text-zinc-400 hover:text-white hover:bg-zinc-900 -ml-4"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" /> Back to Home
+          </Button>
+        </div>
+
         {/* Header Section */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-zinc-900 p-6 rounded-2xl border border-zinc-800">
           <div>
@@ -262,17 +383,16 @@ export default function Event() {
           <div className="flex justify-end gap-4">
             <Button 
               onClick={() => setIsAddModalOpen(true)} 
-              variant="outline"
-              className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              className="h-11 px-6 border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-zinc-950 font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
             >
               <UserPlus className="w-4 h-4 mr-2" /> Add Player
             </Button>
             <Button 
               onClick={handleStartEvent} 
               disabled={players.length < 2}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8"
+              className="h-11 px-8 border-none bg-[#0693e3] hover:bg-[#003388] text-white font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
             >
-              <Play className="w-4 h-4 mr-2" /> Start Event
+              <Play className="w-4 h-4 mr-2" /> {event.format === 'Draft' ? 'Start Draft' : 'Start Event'}
             </Button>
           </div>
         )}
@@ -323,7 +443,7 @@ export default function Event() {
                           <Button variant="ghost" size="icon" onClick={() => openEditModal(player)} className="h-8 w-8 text-zinc-500 hover:text-white">
                             <Edit2 className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleRemovePlayer(player.id)} className="h-8 w-8 text-zinc-500 hover:text-red-400">
+                          <Button variant="ghost" size="icon" onClick={() => setPlayerToDelete(player.id)} className="h-8 w-8 text-zinc-500 hover:text-red-400">
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
@@ -339,6 +459,32 @@ export default function Event() {
               </CardContent>
             </Card>
           </motion.div>
+        ) : event.status === 'drafting' ? (
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, type: 'spring' }}>
+            <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 text-center py-12">
+              <CardContent className="space-y-6">
+                <div className="flex justify-center">
+                  <div className="w-24 h-24 rounded-full bg-zinc-800/50 flex items-center justify-center border border-zinc-700">
+                    <Clock className="w-10 h-10 text-[#ffc72c]" />
+                  </div>
+                </div>
+                <div>
+                  <h2 className="text-3xl font-bold mb-2">Draft in Progress</h2>
+                  <p className="text-zinc-400">Players are currently drafting their decks.</p>
+                </div>
+                <div className="text-6xl font-mono font-bold tracking-tight text-white">
+                  {timeLeft || '00:00'}
+                </div>
+                {isOrganizer && (
+                  <div className="pt-8">
+                    <Button onClick={handleStartEvent} className="h-14 px-8 border-none bg-[#0693e3] hover:bg-[#003388] text-white font-semibold text-lg rounded-xl shadow-md hover:shadow-lg transition-all duration-200 hover:-translate-y-1">
+                      End Draft & Generate Pairings <ChevronRight className="w-5 h-5 ml-2" />
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
         ) : (
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }} 
@@ -349,7 +495,7 @@ export default function Event() {
             <h2 className="text-2xl font-bold flex items-center gap-2">
               <Users className="w-6 h-6" /> Pairings
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {event.pods && JSON.parse(event.pods).map((pod: any, index: number) => (
                 <motion.div 
                   key={pod.podNumber}
@@ -357,21 +503,33 @@ export default function Event() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.1 + 0.2 }}
                 >
-                  <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden">
-                    <div className="bg-zinc-950 px-6 py-3 border-b border-zinc-800 flex justify-between items-center">
-                      <h3 className="font-bold text-lg">Pod {pod.podNumber}</h3>
-                      <Badge variant="outline" className="text-zinc-400 border-zinc-700">{pod.playerIds.length} Players</Badge>
+                  <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden h-full flex flex-col">
+                    <div className="bg-zinc-950 px-6 py-4 border-b border-zinc-800 flex justify-between items-center">
+                      <h3 className="font-bold text-lg flex items-center gap-2">
+                        Table {pod.podNumber}
+                      </h3>
+                      <Badge variant="outline" className="text-zinc-400 border-zinc-700 bg-zinc-900">{pod.playerIds.length} Players</Badge>
                     </div>
-                    <CardContent className="p-0">
-                      <ul className="divide-y divide-zinc-800">
+                    <CardContent className="p-0 flex-1">
+                      <ul className="divide-y divide-zinc-800/50">
                         {pod.playerIds.map((playerId: string) => {
                           const player = players.find(p => p.id === playerId);
+                          const isWinner = pod.winnerIds?.includes(playerId);
                           return (
-                            <li key={playerId} className="px-6 py-4 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors">
-                              <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-zinc-400 text-sm">
-                                {player?.displayName?.charAt(0).toUpperCase() || '?'}
+                            <li 
+                              key={playerId} 
+                              onClick={() => isOrganizer && handleToggleWinner(pod.podNumber, playerId)}
+                              className={`px-6 py-4 flex items-center justify-between transition-colors ${isOrganizer ? 'cursor-pointer hover:bg-zinc-800/50' : ''} ${isWinner ? 'bg-[#ffc72c]/10' : ''}`}
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isWinner ? 'bg-[#ffc72c] text-zinc-950' : 'bg-zinc-800 text-zinc-400'}`}>
+                                  {player?.displayName?.charAt(0).toUpperCase() || '?'}
+                                </div>
+                                <span className={`font-medium ${isWinner ? 'text-[#ffc72c]' : 'text-zinc-200'}`}>
+                                  {player?.displayName || 'Unknown Player'}
+                                </span>
                               </div>
-                              <span className="font-medium">{player?.displayName || 'Unknown Player'}</span>
+                              {isWinner && <Trophy className="w-5 h-5 text-[#ffc72c]" />}
                             </li>
                           );
                         })}
@@ -404,7 +562,7 @@ export default function Event() {
             </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setIsEditModalOpen(false)}>Cancel</Button>
-              <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Save Changes</Button>
+              <Button type="submit" className="border-none bg-[#0693e3] hover:bg-[#003388] text-white">Save Changes</Button>
             </div>
           </form>
         </DialogContent>
@@ -430,9 +588,25 @@ export default function Event() {
             </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setIsAddModalOpen(false)}>Cancel</Button>
-              <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Add Player</Button>
+              <Button type="submit" className="border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-zinc-950 font-semibold">Add Player</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Modal */}
+      <Dialog open={!!playerToDelete} onOpenChange={(open) => !open && setPlayerToDelete(null)}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-50">
+          <DialogHeader>
+            <DialogTitle>Remove Player</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Are you sure you want to remove this player from the event? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-4">
+            <Button variant="ghost" onClick={() => setPlayerToDelete(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleRemovePlayer}>Remove Player</Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

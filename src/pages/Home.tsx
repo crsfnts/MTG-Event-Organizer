@@ -1,16 +1,15 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { v4 as uuidv4 } from 'uuid';
+import { Hash, User, Trophy, Swords, Users } from 'lucide-react';
 
 export default function Home() {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<'join' | 'create'>('join');
   const [joinCode, setJoinCode] = useState('');
   const [joinName, setJoinName] = useState('');
   
@@ -45,15 +44,6 @@ export default function Home() {
       }
       
       await setDoc(doc(db, 'events', eventId), eventData);
-      
-      // Also add the organizer as a player
-      await setDoc(doc(db, 'events', eventId, 'players', auth.currentUser.uid), {
-        id: auth.currentUser.uid,
-        eventId: eventId,
-        displayName: 'Organizer',
-        joinedAt: serverTimestamp(),
-        isOrganizer: true,
-      });
 
       navigate(`/event/${eventId}`);
     } catch (error) {
@@ -73,114 +63,138 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-md space-y-8">
-        <div className="text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-white mb-2">Tabletop Tourney</h1>
-          <p className="text-zinc-400">Create or join an event to get started.</p>
-        </div>
+    <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4 font-sans">
+      <div className="text-center mb-10">
+        <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight text-white mb-4 drop-shadow-lg">MTG Event Generator</h1>
+      </div>
 
-        <div className="grid gap-8">
-          <Card className="bg-zinc-900 border-zinc-800 text-zinc-50">
-            <CardHeader>
-              <CardTitle>Join Event</CardTitle>
-              <CardDescription className="text-zinc-400">Enter an event code to join as a player.</CardDescription>
-            </CardHeader>
-            <form onSubmit={handleJoinEvent}>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="joinCode">Event Code</Label>
-                  <Input 
-                    id="joinCode" 
-                    placeholder="e.g. A1B2C3" 
-                    value={joinCode} 
-                    onChange={(e) => setJoinCode(e.target.value)}
-                    className="bg-zinc-950 border-zinc-800 uppercase"
-                    required
-                  />
+      <div className="bg-white rounded-[2.5rem] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.5)] w-full max-w-md p-8 md:p-10 relative overflow-hidden">
+        {mode === 'join' ? (
+          <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <h2 className="text-3xl font-extrabold text-zinc-900 mb-2">Join Event</h2>
+            <p className="text-zinc-500 mb-8 font-medium">Enter code to join the lobby</p>
+
+            <form onSubmit={handleJoinEvent} className="w-full space-y-5">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <Hash className="h-5 w-5 text-[#0693e3]" />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="joinName">Your Name</Label>
-                  <Input 
-                    id="joinName" 
-                    placeholder="Display Name" 
-                    value={joinName} 
-                    onChange={(e) => setJoinName(e.target.value)}
-                    className="bg-zinc-950 border-zinc-800"
-                    required
-                  />
+                <Input
+                  id="joinCode"
+                  placeholder="Event Code"
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value)}
+                  className="pl-14 h-14 rounded-full bg-white border-none shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] text-zinc-900 text-lg focus-visible:ring-2 focus-visible:ring-[#0693e3]/50 uppercase placeholder:text-zinc-400 placeholder:normal-case transition-shadow"
+                  required
+                />
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <User className="h-5 w-5 text-[#0693e3]" />
                 </div>
-              </CardContent>
-              <CardFooter>
-                <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white">Join Event</Button>
-              </CardFooter>
+                <Input
+                  id="joinName"
+                  placeholder="Display Name"
+                  value={joinName}
+                  onChange={(e) => setJoinName(e.target.value)}
+                  className="pl-14 h-14 rounded-full bg-white border-none shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] text-zinc-900 text-lg focus-visible:ring-2 focus-visible:ring-[#0693e3]/50 placeholder:text-zinc-400 transition-shadow"
+                  required
+                />
+              </div>
+
+              <Button
+                type="submit"
+                className="w-full h-14 mt-4 rounded-full border-none bg-[#0693e3] hover:bg-[#003388] text-white text-lg font-bold shadow-[0_8px_20px_rgba(6,147,227,0.4)] hover:shadow-[0_12px_25px_rgba(6,147,227,0.5)] transition-all duration-300 hover:-translate-y-1"
+              >
+                JOIN EVENT
+              </Button>
             </form>
-          </Card>
 
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t border-zinc-800" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-zinc-950 px-2 text-zinc-500">Or</span>
-            </div>
+            <p className="mt-8 text-zinc-500 font-medium">
+              Want to host a tournament?{' '}
+              <button type="button" onClick={() => setMode('create')} className="text-[#0693e3] font-bold hover:underline transition-colors">
+                Create
+              </button>
+            </p>
           </div>
+        ) : (
+          <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <h2 className="text-3xl font-extrabold text-zinc-900 mb-2">Create Event</h2>
+            <p className="text-zinc-500 mb-8 font-medium">Host a new tournament</p>
 
-          <Card className="bg-zinc-900 border-zinc-800 text-zinc-50">
-            <CardHeader>
-              <CardTitle>Create Event</CardTitle>
-              <CardDescription className="text-zinc-400">Host a new tournament as an organizer.</CardDescription>
-            </CardHeader>
-            <form onSubmit={handleCreateEvent}>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="eventName">Event Name</Label>
-                  <Input 
-                    id="eventName" 
-                    placeholder="Friday Night Magic" 
-                    value={eventName} 
-                    onChange={(e) => setEventName(e.target.value)}
-                    className="bg-zinc-950 border-zinc-800"
-                    required
-                  />
+            <form onSubmit={handleCreateEvent} className="w-full space-y-5">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <Trophy className="h-5 w-5 text-[#ffc72c]" />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="eventFormat">Format</Label>
-                  <Select value={eventFormat} onValueChange={setEventFormat}>
-                    <SelectTrigger className="bg-zinc-950 border-zinc-800">
-                      <SelectValue placeholder="Select format" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-50">
-                      <SelectItem value="Commander">Commander</SelectItem>
-                      <SelectItem value="Draft">Draft</SelectItem>
-                      <SelectItem value="Standard">Standard</SelectItem>
-                      <SelectItem value="Modern">Modern</SelectItem>
-                      <SelectItem value="Pioneer">Pioneer</SelectItem>
-                      <SelectItem value="Custom">Custom</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <Input
+                  id="eventName"
+                  placeholder="Event Name"
+                  value={eventName}
+                  onChange={(e) => setEventName(e.target.value)}
+                  className="pl-14 h-14 rounded-full bg-white border-none shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] text-zinc-900 text-lg focus-visible:ring-2 focus-visible:ring-[#ffc72c]/50 placeholder:text-zinc-400 transition-shadow"
+                  required
+                />
+              </div>
+
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none z-10">
+                  <Swords className="h-5 w-5 text-[#ffc72c]" />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="maxPlayers">Max Players (Optional)</Label>
-                  <Input 
-                    id="maxPlayers" 
-                    type="number" 
-                    placeholder="Leave empty for unlimited" 
-                    value={maxPlayers} 
-                    onChange={(e) => setMaxPlayers(e.target.value)}
-                    className="bg-zinc-950 border-zinc-800"
-                    min="2"
-                  />
+                <Select value={eventFormat} onValueChange={setEventFormat}>
+                  <SelectTrigger className="pl-14 h-14 rounded-full bg-white border-none shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] text-zinc-900 text-lg focus:ring-2 focus:ring-[#ffc72c]/50 transition-shadow">
+                    <SelectValue placeholder="Select format" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white border-zinc-100 text-zinc-900 rounded-2xl shadow-xl">
+                    <SelectItem value="Commander" className="focus:bg-zinc-100 cursor-pointer">Commander</SelectItem>
+                    <SelectItem value="Draft" className="focus:bg-zinc-100 cursor-pointer">Draft</SelectItem>
+                    <SelectItem value="Standard" className="focus:bg-zinc-100 cursor-pointer">Standard</SelectItem>
+                    <SelectItem value="Modern" className="focus:bg-zinc-100 cursor-pointer">Modern</SelectItem>
+                    <SelectItem value="Pioneer" className="focus:bg-zinc-100 cursor-pointer">Pioneer</SelectItem>
+                    <SelectItem value="Custom" className="focus:bg-zinc-100 cursor-pointer">Custom</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <Users className="h-5 w-5 text-[#ffc72c]" />
                 </div>
-              </CardContent>
-              <CardFooter>
-                <Button type="submit" disabled={isCreating} className="w-full bg-zinc-100 text-zinc-900 hover:bg-zinc-300">
-                  {isCreating ? 'Creating...' : 'Create Event'}
-                </Button>
-              </CardFooter>
+                <Input
+                  id="maxPlayers"
+                  type="number"
+                  placeholder="Max Players (Optional)"
+                  value={maxPlayers}
+                  onChange={(e) => setMaxPlayers(e.target.value)}
+                  className="pl-14 h-14 rounded-full bg-white border-none shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] text-zinc-900 text-lg focus-visible:ring-2 focus-visible:ring-[#ffc72c]/50 placeholder:text-zinc-400 transition-shadow"
+                  min="2"
+                />
+              </div>
+
+              <Button
+                type="submit"
+                disabled={isCreating}
+                className="w-full h-14 mt-4 rounded-full border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-zinc-950 text-lg font-bold shadow-[0_8px_20px_rgba(255,199,44,0.4)] hover:shadow-[0_12px_25px_rgba(255,199,44,0.5)] transition-all duration-300 hover:-translate-y-1"
+              >
+                {isCreating ? 'CREATING...' : 'CREATE EVENT'}
+              </Button>
             </form>
-          </Card>
-        </div>
+
+            <p className="mt-8 text-zinc-500 font-medium">
+              Looking for a tournament?{' '}
+              <button type="button" onClick={() => setMode('join')} className="text-[#ffc72c] font-bold hover:underline transition-colors">
+                Join
+              </button>
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="pt-12 text-center space-y-2">
+        <p className="text-zinc-500 text-sm font-medium">Created by Chris Fuentes</p>
+        <p className="text-zinc-600 text-xs max-w-md mx-auto leading-relaxed">
+          Disclaimer: This app may cause spontaneous urges to tap islands, counter spells, and spend excessive amounts of money on shiny cardboard. Use at your own risk.
+        </p>
       </div>
     </div>
   );
