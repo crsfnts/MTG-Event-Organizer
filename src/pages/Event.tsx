@@ -654,25 +654,27 @@ export default function Event() {
             initial={{ opacity: 0, scale: 0.95 }} 
             animate={{ opacity: 1, scale: 1 }} 
             transition={{ duration: 0.5, type: 'spring' }}
-            className="grid grid-cols-1 lg:grid-cols-3 gap-8"
+            className={event.format === 'Draft' ? "grid grid-cols-1 lg:grid-cols-3 gap-8" : "space-y-6"}
           >
-            <div className="lg:col-span-2 space-y-6">
-              <div className="flex justify-between items-center bg-zinc-900 p-4 rounded-xl border border-zinc-800 mb-2">
-                <div className="flex items-center gap-4">
-                  <Clock className="w-6 h-6 text-[#ffc72c]" />
-                  <span className="text-3xl font-mono font-bold">{roundTimeLeft || '00:00'}</span>
+            <div className={event.format === 'Draft' ? "lg:col-span-2 space-y-6" : "space-y-6"}>
+              {event.format === 'Draft' && (
+                <div className="flex justify-between items-center bg-zinc-900 p-4 rounded-xl border border-zinc-800 mb-2">
+                  <div className="flex items-center gap-4">
+                    <Clock className="w-6 h-6 text-[#ffc72c]" />
+                    <span className="text-3xl font-mono font-bold">{roundTimeLeft || '00:00'}</span>
+                  </div>
+                  {isOrganizer && (
+                    <Button variant="outline" onClick={() => { setTimerTarget('round'); setIsTimerModalOpen(true); }} className="border-zinc-700 text-zinc-300 hover:bg-zinc-800">
+                      Set Timer
+                    </Button>
+                  )}
                 </div>
-                {isOrganizer && (
-                  <Button variant="outline" onClick={() => { setTimerTarget('round'); setIsTimerModalOpen(true); }} className="border-zinc-700 text-zinc-300 hover:bg-zinc-800">
-                    Set Timer
-                  </Button>
-                )}
-              </div>
+              )}
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold flex items-center gap-2">
-                  <Users className="w-6 h-6" /> Round {event.round || 1} Pairings
+                  <Users className="w-6 h-6" /> {event.format === 'Draft' ? `Round ${event.round || 1} Pairings` : 'Pairings'}
                 </h2>
-                {isOrganizer && (
+                {isOrganizer && event.format === 'Draft' && (
                   <Button 
                     onClick={handleNextRound}
                     className="h-10 px-4 border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-black hover:text-white font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
@@ -681,7 +683,7 @@ export default function Event() {
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className={`grid grid-cols-1 md:grid-cols-2 ${event.format === 'Draft' ? '' : 'lg:grid-cols-3'} gap-6`}>
                 {event.pods && JSON.parse(event.pods).map((pod: any, index: number) => (
                   <motion.div 
                     key={pod.podNumber}
@@ -727,26 +729,28 @@ export default function Event() {
               </div>
             </div>
             
-            <div className="lg:col-span-1 space-y-6">
-              <h2 className="text-2xl font-bold flex items-center gap-2">
-                <Trophy className="w-6 h-6" /> Standings
-              </h2>
-              <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden">
-                <CardContent className="p-0">
-                  <ul className="divide-y divide-zinc-800/50">
-                    {calculateStandings().map((player, index) => (
-                      <li key={player.id} className="px-6 py-4 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <span className="text-zinc-500 font-mono w-4">{index + 1}.</span>
-                          <span className="font-medium text-zinc-200">{player.displayName}</span>
-                        </div>
-                        <span className="font-bold text-[#ffc72c]">{player.points} pts</span>
-                      </li>
-                    ))}
-                  </ul>
-                </CardContent>
-              </Card>
-            </div>
+            {event.format === 'Draft' && (
+              <div className="lg:col-span-1 space-y-6">
+                <h2 className="text-2xl font-bold flex items-center gap-2">
+                  <Trophy className="w-6 h-6" /> Standings
+                </h2>
+                <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden">
+                  <CardContent className="p-0">
+                    <ul className="divide-y divide-zinc-800/50">
+                      {calculateStandings().map((player, index) => (
+                        <li key={player.id} className="px-6 py-4 flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="text-zinc-500 font-mono w-4">{index + 1}.</span>
+                            <span className="font-medium text-zinc-200">{player.displayName}</span>
+                          </div>
+                          <span className="font-bold text-[#ffc72c]">{player.points} pts</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
           </motion.div>
         )}
       </div>
