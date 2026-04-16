@@ -242,6 +242,97 @@ export default function Event() {
     }
   };
 
+  const calculateStandings = () => {
+    if (!event) return [];
+    
+    const stats: Record<string, { matches: number, wins: number, losses: number, draws: number, points: number, opponents: string[], omwp: number }> = {};
+    players.forEach(p => stats[p.id] = { matches: 0, wins: 0, losses: 0, draws: 0, points: 0, opponents: [], omwp: 0 });
+    
+    const pastRounds = event.pastRounds ? JSON.parse(event.pastRounds) : [];
+    const currentPods = event.pods ? JSON.parse(event.pods) : [];
+    
+    const allRounds = [...pastRounds, currentPods];
+    
+    allRounds.forEach(round => {
+      round.forEach((pod: any) => {
+        const pIds = pod.playerIds;
+        if (pIds.length === 2 && event.format === 'Draft') {
+          const p1 = pIds[0];
+          const p2 = pIds[1];
+          let p1WinsMatch = false;
+          let p2WinsMatch = false;
+          let isDraw = false;
+
+          if (pod.scores) {
+            const s1 = pod.scores[p1] || 0;
+            const s2 = pod.scores[p2] || 0;
+            if (s1 > s2) p1WinsMatch = true;
+            else if (s2 > s1) p2WinsMatch = true;
+            else if (s1 === s2 && s1 > 0) isDraw = true;
+          } else if (pod.winnerIds && pod.winnerIds.length > 0) {
+            if (pod.winnerIds.includes(p1) && pod.winnerIds.includes(p2)) isDraw = true;
+            else if (pod.winnerIds.includes(p1)) p1WinsMatch = true;
+            else if (pod.winnerIds.includes(p2)) p2WinsMatch = true;
+          }
+
+          if (p1WinsMatch || p2WinsMatch || isDraw) {
+            if (stats[p1]) {
+              stats[p1].matches += 1;
+              stats[p1].opponents.push(p2);
+            }
+            if (stats[p2]) {
+              stats[p2].matches += 1;
+              stats[p2].opponents.push(p1);
+            }
+
+            if (p1WinsMatch) {
+              if (stats[p1]) { stats[p1].wins += 1; stats[p1].points += 3; }
+              if (stats[p2]) { stats[p2].losses += 1; }
+            } else if (p2WinsMatch) {
+              if (stats[p2]) { stats[p2].wins += 1; stats[p2].points += 3; }
+              if (stats[p1]) { stats[p1].losses += 1; }
+            } else if (isDraw) {
+              if (stats[p1]) { stats[p1].draws += 1; stats[p1].points += 1; }
+              if (stats[p2]) { stats[p2].draws += 1; stats[p2].points += 1; }
+            }
+          }
+        } else {
+          // Commander / other formats
+          if (pod.winnerIds) {
+            pod.winnerIds.forEach((wId: string) => {
+              if (stats[wId]) stats[wId].points += 3;
+            });
+          }
+        }
+      });
+    });
+
+    const getMWP = (pId: string) => {
+      const s = stats[pId];
+      if (!s || s.matches === 0) return 0.3333;
+      const mwp = s.points / (s.matches * 3);
+      return Math.max(mwp, 0.3333);
+    };
+
+    players.forEach(p => {
+      const s = stats[p.id];
+      if (!s) return;
+      let omwpSum = 0;
+      s.opponents.forEach(oppId => {
+        omwpSum += getMWP(oppId);
+      });
+      s.omwp = s.opponents.length > 0 ? omwpSum / s.opponents.length : 0.3333;
+    });
+
+    return players.map(p => ({
+      ...p,
+      stats: stats[p.id] || { matches: 0, wins: 0, losses: 0, draws: 0, points: 0, opponents: [], omwp: 0.3333 }
+    })).sort((a, b) => {
+      if (b.stats.points !== a.stats.points) return b.stats.points - a.stats.points;
+      return b.stats.omwp - a.stats.omwp;
+    });
+  };
+
   const handleNextRound = async () => {
     if (!eventId || !isOrganizer || !event.pods) return;
     
@@ -252,21 +343,7 @@ export default function Event() {
       
       const currentRound = event.round || 1;
       
-      // Calculate standings to pair next round
-      const points: Record<string, number> = {};
-      players.forEach(p => points[p.id] = 0);
-      
-      newPastRounds.forEach(round => {
-        round.forEach((pod: any) => {
-          if (pod.winnerIds) {
-            pod.winnerIds.forEach((wId: string) => {
-              if (points[wId] !== undefined) points[wId] += 3;
-            });
-          }
-        });
-      });
-      
-      const standings = [...players].sort((a, b) => points[b.id] - points[a.id]);
+      const standings = calculateStandings();
       
       // Generate new pods
       const chunkSize = event.format === 'Commander' ? 4 : 2;
@@ -278,7 +355,8 @@ export default function Event() {
         newPods.push({
           podNumber: podCount++,
           playerIds: toPair.splice(0, chunkSize).map(p => p.id),
-          winnerIds: []
+          winnerIds: [],
+          scores: {}
         });
       }
       
@@ -294,30 +372,30 @@ export default function Event() {
     }
   };
 
-  const calculateStandings = () => {
-    if (!event) return [];
-    const points: Record<string, number> = {};
-    players.forEach(p => points[p.id] = 0);
-    
-    const pastRounds = event.pastRounds ? JSON.parse(event.pastRounds) : [];
-    const currentPods = event.pods ? JSON.parse(event.pods) : [];
-    
-    const allRounds = [...pastRounds, currentPods];
-    
-    allRounds.forEach(round => {
-      round.forEach((pod: any) => {
-        if (pod.winnerIds) {
-          pod.winnerIds.forEach((wId: string) => {
-            if (points[wId] !== undefined) points[wId] += 3;
-          });
+  const handleUpdateScore = async (podNumber: number, playerId: string) => {
+    if (!eventId || !isOrganizer || !event.pods) return;
+    try {
+      const currentPods = JSON.parse(event.pods);
+      const updatedPods = currentPods.map((pod: any) => {
+        if (pod.podNumber === podNumber) {
+          const currentScore = pod.scores?.[playerId] || 0;
+          const newScore = (currentScore + 1) % 3; // 0, 1, 2
+          return {
+            ...pod,
+            scores: {
+              ...(pod.scores || {}),
+              [playerId]: newScore
+            }
+          };
         }
+        return pod;
       });
-    });
-    
-    return players.map(p => ({
-      ...p,
-      points: points[p.id] || 0
-    })).sort((a, b) => b.points - a.points);
+      await updateDoc(doc(db, 'events', eventId), {
+        pods: JSON.stringify(updatedPods)
+      });
+    } catch (error) {
+      console.error("Error updating score:", error);
+    }
   };
 
   const handleToggleWinner = async (podNumber: number, playerId: string) => {
@@ -698,30 +776,56 @@ export default function Event() {
                         </h3>
                         <Badge variant="outline" className="text-zinc-400 border-zinc-700 bg-zinc-900">{pod.playerIds.length} Players</Badge>
                       </div>
-                      <CardContent className="p-0 flex-1">
-                        <ul className="divide-y divide-zinc-800/50">
-                          {pod.playerIds.map((playerId: string) => {
-                            const player = players.find(p => p.id === playerId);
-                            const isWinner = pod.winnerIds?.includes(playerId);
-                            return (
-                              <li 
-                                key={playerId} 
-                                onClick={() => isOrganizer && handleToggleWinner(pod.podNumber, playerId)}
-                                className={`px-6 py-4 flex items-center justify-between transition-colors ${isOrganizer ? 'cursor-pointer hover:bg-zinc-800/50' : ''} ${isWinner ? 'bg-[#ffc72c]/10' : ''}`}
+                      <CardContent className="p-0 flex-1 flex flex-col justify-center">
+                        {event.format === 'Draft' && pod.playerIds.length === 2 ? (
+                          <div className="flex items-center justify-between px-4 py-6">
+                            <div className="flex-1 text-right pr-4">
+                              <span className="font-medium text-zinc-200 text-lg">{players.find(p => p.id === pod.playerIds[0])?.displayName}</span>
+                            </div>
+                            <div className="flex items-center gap-3 bg-zinc-950 px-3 py-2 rounded-xl border border-zinc-800 shadow-inner">
+                              <button 
+                                onClick={() => isOrganizer && handleUpdateScore(pod.podNumber, pod.playerIds[0])}
+                                className={`w-12 h-14 rounded-lg flex items-center justify-center text-3xl font-bold font-mono transition-colors ${isOrganizer ? 'hover:bg-zinc-800 cursor-pointer' : ''} ${(pod.scores?.[pod.playerIds[0]] || 0) > (pod.scores?.[pod.playerIds[1]] || 0) ? 'bg-[#ffc72c] text-zinc-950' : 'bg-zinc-900 text-white'}`}
                               >
-                                <div className="flex items-center gap-3">
-                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isWinner ? 'bg-[#ffc72c] text-zinc-950' : 'bg-zinc-800 text-zinc-400'}`}>
-                                    {player?.displayName?.charAt(0).toUpperCase() || '?'}
+                                {pod.scores?.[pod.playerIds[0]] || 0}
+                              </button>
+                              <span className="text-zinc-600 font-bold text-xl">-</span>
+                              <button 
+                                onClick={() => isOrganizer && handleUpdateScore(pod.podNumber, pod.playerIds[1])}
+                                className={`w-12 h-14 rounded-lg flex items-center justify-center text-3xl font-bold font-mono transition-colors ${isOrganizer ? 'hover:bg-zinc-800 cursor-pointer' : ''} ${(pod.scores?.[pod.playerIds[1]] || 0) > (pod.scores?.[pod.playerIds[0]] || 0) ? 'bg-[#ffc72c] text-zinc-950' : 'bg-zinc-900 text-white'}`}
+                              >
+                                {pod.scores?.[pod.playerIds[1]] || 0}
+                              </button>
+                            </div>
+                            <div className="flex-1 text-left pl-4">
+                              <span className="font-medium text-zinc-200 text-lg">{players.find(p => p.id === pod.playerIds[1])?.displayName}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <ul className="divide-y divide-zinc-800/50">
+                            {pod.playerIds.map((playerId: string) => {
+                              const player = players.find(p => p.id === playerId);
+                              const isWinner = pod.winnerIds?.includes(playerId);
+                              return (
+                                <li 
+                                  key={playerId} 
+                                  onClick={() => isOrganizer && handleToggleWinner(pod.podNumber, playerId)}
+                                  className={`px-6 py-4 flex items-center justify-between transition-colors ${isOrganizer ? 'cursor-pointer hover:bg-zinc-800/50' : ''} ${isWinner ? 'bg-[#ffc72c]/10' : ''}`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isWinner ? 'bg-[#ffc72c] text-zinc-950' : 'bg-zinc-800 text-zinc-400'}`}>
+                                      {player?.displayName?.charAt(0).toUpperCase() || '?'}
+                                    </div>
+                                    <span className={`font-medium ${isWinner ? 'text-[#ffc72c]' : 'text-zinc-200'}`}>
+                                      {player?.displayName || 'Unknown Player'}
+                                    </span>
                                   </div>
-                                  <span className={`font-medium ${isWinner ? 'text-[#ffc72c]' : 'text-zinc-200'}`}>
-                                    {player?.displayName || 'Unknown Player'}
-                                  </span>
-                                </div>
-                                {isWinner && <Trophy className="w-5 h-5 text-[#ffc72c]" />}
-                              </li>
-                            );
-                          })}
-                        </ul>
+                                  {isWinner && <Trophy className="w-5 h-5 text-[#ffc72c]" />}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
                       </CardContent>
                     </Card>
                   </motion.div>
@@ -735,19 +839,34 @@ export default function Event() {
                   <Trophy className="w-6 h-6" /> Standings
                 </h2>
                 <Card className="bg-zinc-900 border-zinc-800 text-zinc-50 overflow-hidden">
-                  <CardContent className="p-0">
-                    <ul className="divide-y divide-zinc-800/50">
-                      {calculateStandings().map((player, index) => (
-                        <li key={player.id} className="px-6 py-4 flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <span className="text-zinc-500 font-mono w-4">{index + 1}.</span>
-                            <span className="font-medium text-zinc-200">{player.displayName}</span>
-                          </div>
-                          <span className="font-bold text-[#ffc72c]">{player.points} pts</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                      <thead className="text-xs text-zinc-500 uppercase bg-zinc-950/80 border-b border-zinc-800">
+                        <tr>
+                          <th className="px-4 py-3 font-semibold">Rank</th>
+                          <th className="px-4 py-3 font-semibold">Name</th>
+                          <th className="px-4 py-3 font-semibold text-center">Pts</th>
+                          <th className="px-4 py-3 font-semibold text-center whitespace-nowrap">W-L-D</th>
+                          <th className="px-4 py-3 font-semibold text-right">OMW%</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800/50">
+                        {calculateStandings().map((player, index) => (
+                          <tr key={player.id} className="hover:bg-zinc-800/30 transition-colors">
+                            <td className="px-4 py-3 text-zinc-500 font-mono">{index + 1}</td>
+                            <td className="px-4 py-3 font-medium text-zinc-200 whitespace-nowrap">{player.displayName}</td>
+                            <td className="px-4 py-3 text-center font-bold text-[#ffc72c]">{player.stats.points}</td>
+                            <td className="px-4 py-3 text-center text-zinc-400 font-mono text-xs whitespace-nowrap">
+                              {player.stats.wins}-{player.stats.losses}-{player.stats.draws}
+                            </td>
+                            <td className="px-4 py-3 text-right text-zinc-500 font-mono text-xs">
+                              {(player.stats.omwp).toFixed(3)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </Card>
               </div>
             )}
