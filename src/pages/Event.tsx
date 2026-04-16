@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { doc, onSnapshot, collection, setDoc, updateDoc, deleteDoc, serverTimestamp, getDoc, deleteField } from 'firebase/firestore';
 import { db, auth } from '../firebase';
@@ -30,6 +30,37 @@ export default function Event() {
   const [isJoining, setIsJoining] = useState(false);
   const [playerToDelete, setPlayerToDelete] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>('');
+  const [roundTimeLeft, setRoundTimeLeft] = useState<string>('');
+  const [isTimerModalOpen, setIsTimerModalOpen] = useState(false);
+  const [timerInputMinutes, setTimerInputMinutes] = useState('50');
+  const [timerTarget, setTimerTarget] = useState<'draft' | 'round'>('draft');
+  const draftChimePlayed = useRef(false);
+  const roundChimePlayed = useRef(false);
+
+  const playChime = () => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      const now = ctx.currentTime;
+      osc.frequency.setValueAtTime(987.77, now); // B5
+      osc.frequency.setValueAtTime(1318.51, now + 0.1); // E6
+      
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.linearRampToValueAtTime(0, now + 0.5);
+      
+      osc.start(now);
+      osc.stop(now + 0.5);
+    } catch (e) {
+      console.error("Audio play failed", e);
+    }
+  };
 
   useEffect(() => {
     if (!eventId || !auth.currentUser) return;
@@ -71,23 +102,43 @@ export default function Event() {
   }, [eventId, navigate]);
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (event?.status === 'drafting' && event?.draftEndTime) {
-      interval = setInterval(() => {
-        const now = Date.now();
+    const interval = setInterval(() => {
+      const now = Date.now();
+      
+      if (event?.status === 'drafting' && event?.draftEndTime) {
         const distance = event.draftEndTime - now;
         if (distance <= 0) {
           setTimeLeft('00:00');
-          clearInterval(interval);
+          if (!draftChimePlayed.current) {
+            playChime();
+            draftChimePlayed.current = true;
+          }
         } else {
-          const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-          const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+          draftChimePlayed.current = false;
+          const minutes = Math.floor(distance / 60000);
+          const seconds = Math.floor((distance % 60000) / 1000);
           setTimeLeft(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
         }
-      }, 1000);
-    }
+      }
+
+      if (event?.status === 'started' && event?.roundEndTime) {
+        const distance = event.roundEndTime - now;
+        if (distance <= 0) {
+          setRoundTimeLeft('00:00');
+          if (!roundChimePlayed.current) {
+            playChime();
+            roundChimePlayed.current = true;
+          }
+        } else {
+          roundChimePlayed.current = false;
+          const minutes = Math.floor(distance / 60000);
+          const seconds = Math.floor((distance % 60000) / 1000);
+          setRoundTimeLeft(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+        }
+      }
+    }, 1000);
     return () => clearInterval(interval);
-  }, [event?.status, event?.draftEndTime]);
+  }, [event?.status, event?.draftEndTime, event?.roundEndTime]);
 
   useEffect(() => {
     const joinEvent = async () => {
@@ -118,6 +169,28 @@ export default function Event() {
       joinEvent();
     }
   }, [eventId, loading, event, location.state, isOrganizer]);
+
+  const handleSetTimer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!eventId || !isOrganizer) return;
+    const minutes = parseInt(timerInputMinutes);
+    if (isNaN(minutes) || minutes <= 0) return;
+
+    try {
+      const updateData: any = {};
+      if (timerTarget === 'draft') {
+        updateData.draftEndTime = Date.now() + minutes * 60000;
+        draftChimePlayed.current = false;
+      } else {
+        updateData.roundEndTime = Date.now() + minutes * 60000;
+        roundChimePlayed.current = false;
+      }
+      await updateDoc(doc(db, 'events', eventId), updateData);
+      setIsTimerModalOpen(false);
+    } catch (error) {
+      console.error("Error setting timer:", error);
+    }
+  };
 
   const copyToClipboard = () => {
     if (eventId) {
@@ -161,7 +234,8 @@ export default function Event() {
         status: 'started',
         round: 1,
         pastRounds: '[]',
-        pods: JSON.stringify(pods)
+        pods: JSON.stringify(pods),
+        roundEndTime: Date.now() + 50 * 60000 // 50 minutes
       });
     } catch (error) {
       console.error("Error starting event:", error);
@@ -211,7 +285,8 @@ export default function Event() {
       await updateDoc(doc(db, 'events', eventId), {
         round: currentRound + 1,
         pods: JSON.stringify(newPods),
-        pastRounds: JSON.stringify(newPastRounds)
+        pastRounds: JSON.stringify(newPastRounds),
+        roundEndTime: Date.now() + 50 * 60000 // 50 minutes
       });
       
     } catch (error) {
@@ -279,7 +354,9 @@ export default function Event() {
         status: 'lobby',
         pods: deleteField(),
         round: deleteField(),
-        pastRounds: deleteField()
+        pastRounds: deleteField(),
+        roundEndTime: deleteField(),
+        draftEndTime: deleteField()
       });
     } catch (error) {
       console.error("Error resetting event:", error);
@@ -482,8 +559,7 @@ export default function Event() {
           <div className="flex justify-end gap-4">
             <Button 
               onClick={handleStartEvent} 
-              variant="outline"
-              className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              className="border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-black hover:text-white font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
             >
               <RefreshCw className="w-4 h-4 mr-2" /> Reshuffle Pods
             </Button>
@@ -553,8 +629,15 @@ export default function Event() {
                   <h2 className="text-3xl font-bold mb-2">Draft in Progress</h2>
                   <p className="text-zinc-400">Players are currently drafting their decks.</p>
                 </div>
-                <div className="text-6xl font-mono font-bold tracking-tight text-white">
-                  {timeLeft || '00:00'}
+                <div className="flex flex-col items-center gap-4">
+                  <div className="text-6xl font-mono font-bold tracking-tight text-white">
+                    {timeLeft || '00:00'}
+                  </div>
+                  {isOrganizer && (
+                    <Button variant="outline" size="sm" onClick={() => { setTimerTarget('draft'); setIsTimerModalOpen(true); }} className="border-zinc-700 text-zinc-300 hover:bg-zinc-800">
+                      Set Timer
+                    </Button>
+                  )}
                 </div>
                 {isOrganizer && (
                   <div className="pt-8">
@@ -574,6 +657,17 @@ export default function Event() {
             className="grid grid-cols-1 lg:grid-cols-3 gap-8"
           >
             <div className="lg:col-span-2 space-y-6">
+              <div className="flex justify-between items-center bg-zinc-900 p-4 rounded-xl border border-zinc-800 mb-2">
+                <div className="flex items-center gap-4">
+                  <Clock className="w-6 h-6 text-[#ffc72c]" />
+                  <span className="text-3xl font-mono font-bold">{roundTimeLeft || '00:00'}</span>
+                </div>
+                {isOrganizer && (
+                  <Button variant="outline" onClick={() => { setTimerTarget('round'); setIsTimerModalOpen(true); }} className="border-zinc-700 text-zinc-300 hover:bg-zinc-800">
+                    Set Timer
+                  </Button>
+                )}
+              </div>
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold flex items-center gap-2">
                   <Users className="w-6 h-6" /> Round {event.round || 1} Pairings
@@ -581,7 +675,7 @@ export default function Event() {
                 {isOrganizer && (
                   <Button 
                     onClick={handleNextRound}
-                    className="h-10 px-4 border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-zinc-950 font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
+                    className="h-10 px-4 border-none bg-[#ffc72c] hover:bg-[#ffbe18] text-black hover:text-white font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
                   >
                     Next Round <ChevronRight className="w-4 h-4 ml-1" />
                   </Button>
@@ -721,6 +815,33 @@ export default function Event() {
             <Button variant="ghost" onClick={() => setPlayerToDelete(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleRemovePlayer}>Remove Player</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Timer Modal */}
+      <Dialog open={isTimerModalOpen} onOpenChange={setIsTimerModalOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-50">
+          <DialogHeader>
+            <DialogTitle>Set Timer</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSetTimer} className="space-y-4 pt-4">
+            <div className="space-y-2">
+              <Label htmlFor="timerMinutes">Minutes</Label>
+              <Input 
+                id="timerMinutes" 
+                type="number"
+                value={timerInputMinutes} 
+                onChange={(e) => setTimerInputMinutes(e.target.value)}
+                className="bg-zinc-950 border-zinc-800"
+                min="1"
+                required
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setIsTimerModalOpen(false)}>Cancel</Button>
+              <Button type="submit" className="border-none bg-[#0693e3] hover:bg-[#003388] text-white">Start Timer</Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
