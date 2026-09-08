@@ -20,6 +20,8 @@ export default function Event() {
   const [players, setPlayers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [isCopyingPlayers, setIsCopyingPlayers] = useState(false);
+  const [copyPlayersMessage, setCopyPlayersMessage] = useState('');
   const [isOrganizer, setIsOrganizer] = useState(false);
   const [editPlayerId, setEditPlayerId] = useState<string | null>(null);
   const [editPlayerName, setEditPlayerName] = useState('');
@@ -197,6 +199,31 @@ export default function Event() {
       navigator.clipboard.writeText(eventId);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const copyPlayerList = async () => {
+    if (!isOrganizer || isCopyingPlayers || players.length === 0) return;
+
+    const playerNames = players
+      .map(player => player.displayName?.trim() || '')
+      .filter(Boolean)
+      .join('\n');
+
+    if (!playerNames) {
+      setCopyPlayersMessage('No player names to copy.');
+      return;
+    }
+
+    setIsCopyingPlayers(true);
+    setCopyPlayersMessage('');
+    try {
+      await navigator.clipboard.writeText(playerNames);
+      setCopyPlayersMessage('Player list copied.');
+    } catch {
+      setCopyPlayersMessage('Could not copy the player list. Please allow clipboard access and try again.');
+    } finally {
+      setIsCopyingPlayers(false);
     }
   };
 
@@ -655,10 +682,27 @@ export default function Event() {
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
             <Card className="bg-zinc-900 border-zinc-800 text-zinc-50">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="w-5 h-5" />
-                  Lobby ({players.length})
-                </CardTitle>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <CardTitle className="flex items-center gap-2">
+                    <Users className="w-5 h-5" />
+                    Lobby ({players.length})
+                  </CardTitle>
+                  {isOrganizer && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={copyPlayerList}
+                      disabled={players.length === 0 || isCopyingPlayers}
+                      className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                    >
+                      <Copy className="w-4 h-4 mr-2" />
+                      {isCopyingPlayers ? 'Copying...' : 'Copy player list'}
+                    </Button>
+                  )}
+                </div>
+                {isOrganizer && (
+                  <p role="status" className="text-sm text-zinc-400">{copyPlayersMessage}</p>
+                )}
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
